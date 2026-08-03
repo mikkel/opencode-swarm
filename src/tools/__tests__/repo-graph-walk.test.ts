@@ -127,4 +127,104 @@ describe('repo-graph walker — issue #704 regression suite', () => {
 			fsSync.rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+	// Nested repositories (embedded checkouts, vendored clones, `git worktree`
+	// trees where `.git` is a file) are separate repos, never host-workspace
+	// source: scanning them fills the file cap with duplicate trees and turns
+	// init into minutes of duplicate symbol extraction.
+	function makeNestedRepoFixture(root: string): void {
+		const src = path.join(root, 'src');
+		fsSync.mkdirSync(src, { recursive: true });
+		fsSync.writeFileSync(path.join(src, 'host.ts'), 'export const h = 1;');
+		// Embedded checkout: .git as a directory.
+		const clone = path.join(root, 'vendor-clone');
+		fsSync.mkdirSync(path.join(clone, '.git'), { recursive: true });
+		fsSync.writeFileSync(path.join(clone, 'dupe.ts'), 'export const d = 1;');
+		// git-worktree layout: .git as a plain file pointing at the real gitdir.
+		const worktree = path.join(root, 'worktrees', 'wt1');
+		fsSync.mkdirSync(worktree, { recursive: true });
+		fsSync.writeFileSync(
+			path.join(worktree, '.git'),
+			'gitdir: /elsewhere/.git/worktrees/wt1\n',
+		);
+		fsSync.writeFileSync(path.join(worktree, 'dupe.ts'), 'export const d = 2;');
+	}
+
+	test('sync walker skips nested git repos (embedded checkout and worktree)', () => {
+		const root = makeTmpDir('repo-graph-nested-');
+		try {
+			makeNestedRepoFixture(root);
+			const graph = buildWorkspaceGraph(root);
+			const nodePaths = Object.keys(graph.nodes);
+			expect(nodePaths.length).toBe(1);
+			expect(nodePaths[0].endsWith('host.ts')).toBe(true);
+		} finally {
+			fsSync.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test('async walker skips nested git repos (embedded checkout and worktree)', async () => {
+		const root = makeTmpDir('repo-graph-nested-async-');
+		try {
+			makeNestedRepoFixture(root);
+			const graph = await buildWorkspaceGraphAsync(root);
+			const nodePaths = Object.keys(graph.nodes);
+			expect(nodePaths.length).toBe(1);
+			expect(nodePaths[0].endsWith('host.ts')).toBe(true);
+		} finally {
+			fsSync.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test('scan phase honors scanBudgetMs and keeps the partial graph (sync)', () => {
+		const root = makeTmpDir('repo-graph-scan-budget-');
+		try {
+			const dir = path.join(root, 'src');
+			fsSync.mkdirSync(dir, { recursive: true });
+			for (let i = 0; i < 20; i++) {
+				fsSync.writeFileSync(path.join(dir, `f${i}.ts`), 'export {};');
+			}
+			// Fake clock: walk stays within budget, then each subsequent now()
+			// call advances time so the scan loop's budget check trips partway.
+			let now = 0;
+			builderInternals.now = () => {
+				now += 100;
+				return now;
+			};
+			const graph = buildWorkspaceGraph(root, {
+				walkBudgetMs: 1000000,
+				scanBudgetMs: 500,
+			});
+			const count = Object.keys(graph.nodes).length;
+			expect(count).toBeGreaterThan(0);
+			expect(count).toBeLessThan(20);
+		} finally {
+			fsSync.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test('scan phase honors scanBudgetMs and keeps the partial graph (async)', async () => {
+		const root = makeTmpDir('repo-graph-scan-budget-async-');
+		try {
+			const dir = path.join(root, 'src');
+			fsSync.mkdirSync(dir, { recursive: true });
+			for (let i = 0; i < 20; i++) {
+				fsSync.writeFileSync(path.join(dir, `f${i}.ts`), 'export {};');
+			}
+			let now = 0;
+			builderInternals.now = () => {
+				now += 100;
+				return now;
+			};
+			const graph = await buildWorkspaceGraphAsync(root, {
+				walkBudgetMs: 1000000,
+				scanBudgetMs: 500,
+			});
+			const count = Object.keys(graph.nodes).length;
+			expect(count).toBeGreaterThan(0);
+			expect(count).toBeLessThan(20);
+		} finally {
+			fsSync.rmSync(root, { recursive: true, force: true });
+		}
+	});
 });

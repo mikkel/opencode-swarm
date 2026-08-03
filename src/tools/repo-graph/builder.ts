@@ -132,6 +132,7 @@ const SUPPORTED_EXTENSIONS = new Set(
  */
 const DEFAULT_WALK_FILE_CAP = 10000;
 const DEFAULT_WALK_BUDGET_MS = 5000;
+const DEFAULT_SCAN_BUDGET_MS = 30000;
 const ASYNC_WALK_YIELD_INTERVAL = 200;
 const ASYNC_SCAN_YIELD_INTERVAL = 16;
 const MAX_DIAGNOSTIC_ENTRIES = 200;
@@ -1292,6 +1293,20 @@ function isFileCapReached(ctx: WalkContext, filesLength: number): boolean {
 	return false;
 }
 
+/**
+ * A directory that contains its own `.git` entry is a separate repository
+ * (embedded checkout, vendored clone, submodule, or `git worktree` — where
+ * `.git` is a file, not a directory), never part of the host workspace's
+ * source graph. Scanning them wastes the file cap on duplicate trees: a
+ * workspace with N embedded checkouts of itself fills the cap N times over
+ * and turns init into minutes of duplicate symbol extraction. The scan root
+ * itself is never passed here — only child entries — so the host repo's own
+ * `.git` does not suppress its scan.
+ */
+function isNestedGitRepo(dir: string): boolean {
+	return existsSync(path.join(dir, '.git'));
+}
+
 function canonicalDirKey(dir: string): string | null {
 	try {
 		return realpathSync(dir);
@@ -1381,6 +1396,10 @@ function walkSyncInto(dir: string, ctx: WalkContext, files: string[]): void {
 		}
 
 		if (entry.isDirectory()) {
+			if (isNestedGitRepo(fullPath)) {
+				ctx.stats.skippedDirs++;
+				continue;
+			}
 			walkSyncInto(fullPath, ctx, files);
 		} else if (entry.isFile()) {
 			const ext = path.extname(fullPath).toLowerCase();
@@ -1459,6 +1478,10 @@ async function findSourceFilesAsync(
 				continue;
 			}
 			if (entry.isDirectory()) {
+				if (isNestedGitRepo(fullPath)) {
+					ctx.stats.skippedDirs++;
+					continue;
+				}
 				queue.push(fullPath);
 			} else if (entry.isFile()) {
 				const ext = path.extname(fullPath).toLowerCase();
@@ -2043,6 +2066,7 @@ export function buildWorkspaceGraph(
 	const maxFileSize = options?.maxFileSizeBytes ?? 1024 * 1024; // 1MB default
 	const maxFiles = options?.maxFiles ?? DEFAULT_WALK_FILE_CAP;
 	const walkBudgetMs = options?.walkBudgetMs ?? DEFAULT_WALK_BUDGET_MS;
+	const scanBudgetMs = options?.scanBudgetMs ?? DEFAULT_SCAN_BUDGET_MS;
 	const followSymlinks = options?.followSymlinks ?? false;
 
 	// Resolve workspace root to absolute path for scanning only
@@ -2094,7 +2118,14 @@ export function buildWorkspaceGraph(
 	// go straight in via appendNodeFast — metadata is computed once below. This
 	// keeps construction O(N) on large repos (issue #1144).
 	const seenEdges = new Set<string>();
+	const scanStartedAt = _internals.now();
+	let scanTruncated = false;
 	for (const filePath of sourceFiles) {
+		if (_internals.now() - scanStartedAt > scanBudgetMs) {
+			stats.truncated = true;
+			scanTruncated = true;
+			break;
+		}
 		let content: string;
 		let fileStats: fsSync.Stats;
 
@@ -2227,6 +2258,13 @@ export function buildWorkspaceGraph(
 		}
 	}
 
+	if (scanTruncated) {
+		logger.warn(
+			`[repo-graph] Scan truncated: extracted ${stats.filesScanned} of ` +
+				`${sourceFiles.length} files within the ${scanBudgetMs}ms scan budget.`,
+		);
+	}
+
 	// Update final metadata with scan stats
 	graph.metadata = {
 		generatedAt: new Date().toISOString(),
@@ -2265,6 +2303,7 @@ export async function buildWorkspaceGraphAsync(
 	const maxFileSize = options?.maxFileSizeBytes ?? 1024 * 1024;
 	const maxFiles = options?.maxFiles ?? DEFAULT_WALK_FILE_CAP;
 	const walkBudgetMs = options?.walkBudgetMs ?? DEFAULT_WALK_BUDGET_MS;
+	const scanBudgetMs = options?.scanBudgetMs ?? DEFAULT_SCAN_BUDGET_MS;
 	const followSymlinks = options?.followSymlinks ?? false;
 
 	const absoluteRoot = path.resolve(workspaceRoot);
@@ -2316,7 +2355,14 @@ export async function buildWorkspaceGraphAsync(
 	const seenSymbolEdges = new Set<string>();
 	const allSymbolEdges: SymbolEdge[] = [];
 	let processedSinceYield = 0;
+	const scanStartedAt = _internals.now();
+	let scanTruncated = false;
 	for (const filePath of sourceFiles) {
+		if (_internals.now() - scanStartedAt > scanBudgetMs) {
+			stats.truncated = true;
+			scanTruncated = true;
+			break;
+		}
 		const result = await scanFileAsync(filePath, absoluteRoot, maxFileSize);
 		mergeDiagnostics(diagnostics, result.diagnostics);
 		if (result.node) {
@@ -2364,6 +2410,13 @@ export async function buildWorkspaceGraphAsync(
 		if (processedSinceYield % ASYNC_SCAN_YIELD_INTERVAL === 0) {
 			await yieldToEventLoop();
 		}
+	}
+
+	if (scanTruncated) {
+		logger.warn(
+			`[repo-graph] Scan truncated: extracted ${stats.filesScanned} of ` +
+				`${sourceFiles.length} files within the ${scanBudgetMs}ms scan budget.`,
+		);
 	}
 
 	graph.metadata = {

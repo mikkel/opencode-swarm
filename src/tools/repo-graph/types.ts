@@ -459,6 +459,15 @@ export interface BuildWorkspaceGraphOptions {
 	maxFileSizeBytes?: number;
 	maxFiles?: number;
 	walkBudgetMs?: number;
+	/**
+	 * Wall-clock budget for the per-file extraction phase (symbol extraction,
+	 * import parsing, ontology). The walk's `walkBudgetMs` bounds traversal
+	 * only; without this cap, a walk that collects the full `maxFiles` set can
+	 * still monopolize the event loop for minutes of CPU-bound parsing. On
+	 * exceed, the build stops early, keeps the partial graph, and marks the
+	 * scan truncated.
+	 */
+	scanBudgetMs?: number;
 	followSymlinks?: boolean;
 	/**
 	 * Extra directory basenames to skip during the workspace walk, merged with
