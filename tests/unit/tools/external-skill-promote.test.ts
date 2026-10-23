@@ -15,6 +15,7 @@ import {
 	_internals,
 	external_skill_promote,
 } from '../../../src/tools/external-skill-promote.js';
+import { freezeClock } from '../../helpers/test-clock.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -145,8 +146,15 @@ describe('external_skill_promote', () => {
 	let originalFileExists: typeof _internals.fileExists;
 	let writtenFilePath: string | null;
 	let writtenFileContent: string | null;
+	let restoreClock: () => void;
 
 	beforeEach(async () => {
+		// The validator rechecks source freshness using its own clock. Freeze
+		// both time reads so the fixed June fixtures cannot expire in CI.
+		restoreClock = freezeClock({
+			fixedNow: Date.parse('2026-06-09T12:00:00.000Z'),
+			isoNow: '2026-06-09T12:00:00.000Z',
+		});
 		tmpDir = await createTempDir();
 		originalLoadConfig = _internals.loadConfig;
 		originalWriteSkillFile = _internals.writeSkillFile;
@@ -177,6 +185,7 @@ describe('external_skill_promote', () => {
 		_internals.writeSkillFile = originalWriteSkillFile;
 		_internals.getTimestamp = originalGetTimestamp;
 		_internals.fileExists = originalFileExists;
+		restoreClock();
 		await removeTempDir(tmpDir);
 	});
 
