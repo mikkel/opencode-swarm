@@ -1,5 +1,14 @@
 # Changelog
 
+## [7.135.1](https://github.com/mikkel/opencode-swarm/compare/v7.135.0...v7.135.1) (2026-10-23)
+
+
+### Bug Fixes
+
+* **scope:** resolve coder write scope against the session's own workspace root ([89cc8fd](https://github.com/mikkel/opencode-swarm/commit/89cc8fd7bc825fe2a375ebdbc1536135c790c10b))
+* **scope:** resolve coder write scope against the session's own workspace root ([2be4bc2](https://github.com/mikkel/opencode-swarm/commit/2be4bc2f7b0db69c8017c1dd87053c1c3acec6d3)), closes [#2002](https://github.com/mikkel/opencode-swarm/issues/2002)
+* **security:** require patched bun and node runtimes ([#1](https://github.com/mikkel/opencode-swarm/issues/1)) ([f8cfd09](https://github.com/mikkel/opencode-swarm/commit/f8cfd096f8434739cb8793bd7516e973504ebadc))
+
 ## [7.135.0](https://github.com/ZaxbyHub/opencode-swarm/compare/v7.134.3...v7.135.0) (2026-08-02)
 
 
